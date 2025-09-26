@@ -1,29 +1,18 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { loadRankerConfig } from '../config.js';
-import { RankerConfig, InstagramUser, UserWithBotScore, PostAnalysis, AnalysisResult } from '../types/index.js';
 
 export class ContentRanker {
-  private weights: RankerConfig | null = null;
-  private outputDir: string;
-
-  constructor(private customWeights: Partial<RankerConfig> = {}) {
+  constructor(rankerConfig) {
+    this.weights = rankerConfig;
     this.outputDir = path.join(process.cwd(), 'output');
   }
 
-  private async getWeights(): Promise<RankerConfig> {
-    if (!this.weights) {
-      const defaultWeights = await loadRankerConfig();
-      this.weights = {
-        ...defaultWeights,
-        ...this.customWeights
-      };
-    }
+  async #getWeights() {
     return this.weights;
   }
 
   // Analisa padrões suspeitos no username
-  private analyzeUsernamePattern(username: string): number {
+  #analyzeUsernamePattern(username) {
     if (!username) return 0;
     
     let score = 0;
@@ -52,7 +41,7 @@ export class ContentRanker {
   }
 
   // Analisa padrões suspeitos no nome completo
-  private analyzeFullNamePattern(fullName: string): number {
+  #analyzeFullNamePattern(fullName) {
     if (!fullName) return 0.2; // Sem nome é suspeito
     
     let score = 0;
@@ -79,7 +68,7 @@ export class ContentRanker {
   }
 
   // Calcula ratio de seguidores para seguindo
-  private calculateFollowerFollowingRatio(followerCount: number, followingCount: number): number {
+  #calculateFollowerFollowingRatio(followerCount, followingCount) {
     if (followingCount === 0) return followerCount > 0 ? 10 : 1; // Évita divisão por zero
     
     const ratio = followerCount / followingCount;
@@ -93,7 +82,7 @@ export class ContentRanker {
   }
 
   // Estima idade da conta baseado em métricas
-  private estimateAccountAge(user: InstagramUser): number {
+  #estimateAccountAge(user) {
     // Critérios simples para estimar idade da conta
     // Contas mais estabelecidas tendem a ter mais posts, bio, etc.
     
@@ -120,12 +109,12 @@ export class ContentRanker {
   }
 
   // Calcula score de bot para um usuário
-  public async calculateBotScore(user: InstagramUser): Promise<number> {
-    const weights = await this.getWeights();
+  async calculateBotScore(user) {
+    const weights = await this.#getWeights();
     let score = 0;
     
     // Profile analysis
-    const followerFollowingRatio = this.calculateFollowerFollowingRatio(
+    const followerFollowingRatio = this.#calculateFollowerFollowingRatio(
       user.followerCount || 0, 
       user.followingCount || 0
     );
@@ -144,10 +133,10 @@ export class ContentRanker {
     score += (user.hasHighlights ? 1 : 0) * weights.weightHasHighlights;
     
     // Name/username analysis
-    const usernamePattern = this.analyzeUsernamePattern(user.username);
+    const usernamePattern = this.#analyzeUsernamePattern(user.username);
     score += usernamePattern * weights.weightUsernamePattern;
     
-    const fullNamePattern = this.analyzeFullNamePattern(user.full_name);
+    const fullNamePattern = this.#analyzeFullNamePattern(user.full_name);
     score += fullNamePattern * weights.weightFullNamePattern;
     
     // Engagement analysis
@@ -158,7 +147,7 @@ export class ContentRanker {
     score += followingScore * weights.weightFollowingCount;
     
     // Account age
-    const accountAge = this.estimateAccountAge(user);
+    const accountAge = this.#estimateAccountAge(user);
     score += accountAge * weights.weightAccountAge;
     
     // Behavior analysis
@@ -174,20 +163,20 @@ export class ContentRanker {
   }
 
   // Determina se um usuário é bot baseado no threshold
-  public async isBot(user: InstagramUser): Promise<boolean> {
+  async isBot(user) {
     const score = await this.calculateBotScore(user);
-    const weights = await this.getWeights();
+    const weights = await this.#getWeights();
     return score > weights.botThreshold;
   }
 
   // Analisa um arquivo de usuários enriquecidos
-  public async analyzeEnrichedFile(filePath: string): Promise<AnalysisResult> {
+  async analyzeEnrichedFile(filePath) {
     try {
       const data = await fs.readFile(filePath, 'utf-8');
       const enrichedData = JSON.parse(data);
       
-      const usersWithScores: UserWithBotScore[] = await Promise.all(
-        enrichedData.users.map(async (user: InstagramUser) => ({
+      const usersWithScores = await Promise.all(
+        enrichedData.users.map(async (user) => ({
           ...user,
           botScore: await this.calculateBotScore(user),
           isBot: await this.isBot(user)
@@ -203,14 +192,15 @@ export class ContentRanker {
         ? (usersWithScores.reduce((sum, user) => sum + user.botScore, 0) / totalUsers).toFixed(3)
         : '0.000';
       
-      const analysis: PostAnalysis = {
+      const analysis = {
         timestamp: new Date().toISOString(),
         postId: enrichedData.postId,
         totalUsers,
         totalPossibleBots: totalBots,
         botPercentage,
         averageScore,
-        possibleBots
+        possibleBots,
+        allUsers: usersWithScores // Incluir todos os usuários com pontuações
       };
       
       return { analysis };
@@ -221,14 +211,13 @@ export class ContentRanker {
   }
 
   // Processa todos os arquivos de uma pasta
-  public async processPostDirectory(postDir: string): Promise<void> {
+  async processPostDirectory(postDir) {
     const enrichedFilePath = path.join(postDir, 'users.enriched.json');
     const outputFilePath = path.join(postDir, 'users.analysis.json');
     
     try {
       await fs.access(enrichedFilePath);
     } catch {
-      console.log(`Arquivo enriquecido não encontrado: ${enrichedFilePath}`);
       return;
     }
     
@@ -245,7 +234,7 @@ export class ContentRanker {
   }
 
   // Processa todos os posts no diretório output
-  public async processAllPosts(): Promise<void> {
+  async processAllPosts() {
     try {
       const entries = await fs.readdir(this.outputDir, { withFileTypes: true });
       const postDirs = entries
@@ -253,17 +242,12 @@ export class ContentRanker {
         .map(entry => path.join(this.outputDir, entry.name));
       
       if (postDirs.length === 0) {
-        console.log('Nenhum diretório de post encontrado');
         return;
       }
-      
-      console.log(`Processando ${postDirs.length} posts...`);
       
       for (const postDir of postDirs) {
         await this.processPostDirectory(postDir);
       }
-      
-      console.log('Análise de bots concluída!');
       
     } catch (error) {
       console.error('Erro ao processar posts:', error);
@@ -272,18 +256,17 @@ export class ContentRanker {
   }
 
   // Obtém configuração atual
-  public async getWeightsPublic(): Promise<RankerConfig> {
-    const weights = await this.getWeights();
+  async getWeightsPublic() {
+    const weights = await this.#getWeights();
     return { ...weights };
   }
 
   // Atualiza configuração
-  public async updateWeights(newWeights: Partial<RankerConfig>): Promise<void> {
-    const currentWeights = await this.getWeights();
+  async updateWeights(newWeights) {
+    const currentWeights = await this.#getWeights();
     this.weights = {
       ...currentWeights,
       ...newWeights
     };
-    console.log('Bot detection weights updated:', this.weights);
   }
 }

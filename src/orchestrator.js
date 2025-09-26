@@ -1,29 +1,28 @@
-import { ContentFinder } from './content.finder.js';
-import { ContentRanker } from './content.ranker.js';
+import { ContentFinder } from './finder.js';
+import { ContentRanker } from './analyzer.js';
+import { UserEnricher } from './user.enricher.js';
 import fs from 'fs/promises';
 import path from 'path';
 
 export default class Orchestrator {
-  private postUrls: string[];
-  private postFinder: ContentFinder;
-  private botRanker: ContentRanker;
-  private outputDir: string;
-
-  constructor(postUrls: string[]) {
+  constructor(postUrls, config) {
     this.postUrls = postUrls;
-    this.postFinder = new ContentFinder();
-    this.botRanker = new ContentRanker();
+    this.config = config;
+    this.finder = new ContentFinder(config.finder, config.headers);
+    this.enricher = new UserEnricher(config.headers);
+    this.analyzer = new ContentRanker(config.analyzer);
     this.outputDir = path.join(process.cwd(), 'output');
   }
 
   // Extrai post ID da URL
-  private extractPostIdFromUrl(url: string): string | null {
+  #extractPostIdFromUrl(url) {
+    // Extrai apenas o ID numérico do formato /media/XXXX_YYYY/
     const match = url.match(/\/media\/(\d+_\d+)/);
     return match ? match[1] : null;
   }
 
   // Cria diretório para o post
-  private async createPostDirectory(postId: string): Promise<string> {
+  async #createPostDirectory(postId) {
     try {
       const postDir = path.join(this.outputDir, `post-${postId}`);
       await fs.mkdir(postDir, { recursive: true });
@@ -34,7 +33,7 @@ export default class Orchestrator {
   }
 
   // Move e renomeia arquivos para a estrutura organizada
-  private async organizePostFiles(postId: string): Promise<void> {
+  async #organizePostFiles(postId) {
     try {
       const postDir = path.join(this.outputDir, `post-${postId}`);
       
@@ -50,17 +49,15 @@ export default class Orchestrator {
       try {
         await fs.access(originalUsersFile);
         await fs.rename(originalUsersFile, newUsersFile);
-        console.log(`✓ Moved: ${postId}-users.json → post-${postId}/users.json`);
       } catch (error) {
-        console.log(`⚠ File not found: ${postId}-users.json`);
+        // Arquivo não encontrado, continua
       }
 
       try {
         await fs.access(originalEnrichedFile);
         await fs.rename(originalEnrichedFile, newEnrichedFile);
-        console.log(`✓ Moved: ${postId}-enriched-users.json → post-${postId}/users.enriched.json`);
       } catch (error) {
-        console.log(`⚠ File not found: ${postId}-enriched-users.json`);
+        // Arquivo não encontrado, continua
       }
     } catch (error) {
       console.error(`Error organizing files for ${postId}:`, error instanceof Error ? error.message : 'Unknown error');
@@ -68,40 +65,52 @@ export default class Orchestrator {
   }
 
   // Processa um post específico
-  private async processPost(url: string): Promise<void> {
-    const postId = this.extractPostIdFromUrl(url);
+  async #processPost(url) {
+    const postId = this.#extractPostIdFromUrl(url);
     
     if (!postId) {
       console.error(`❌ Invalid URL: ${url}`);
       return;
     }
 
-    console.log(`\n📸 Processing Post: ${postId}`);
-    console.log(`🔗 URL: ${url}`);
-    
     try {
-      // Cria diretório do post
-      await this.createPostDirectory(postId);
+      // Verifica se já existe diretório para este post
+      const existingPostDir = path.join(this.outputDir, `post-${postId}`);
+      let postDir = existingPostDir;
+      
+      try {
+        await fs.access(existingPostDir);
+      } catch {
+        // Se não existe, cria um novo
+        postDir = await this.#createPostDirectory(postId);
+      }
       
       // Busca dados do post
-      console.log('📊 Fetching post data...');
-      const users = await this.postFinder.fetchPostData(url);
+      console.log('📊 Buscando dados do post...');
+      const users = await this.finder.fetchPostData(url);
       
       if (users.length === 0) {
-        console.log('⚠ No users found for this post');
+        console.log('⚠️ Nenhum usuário encontrado para este post');
         return;
       }
 
+      console.log(`📊 Encontrados ${users.length} usuários`);
+      
       // Salva dados iniciais
-      await this.postFinder.saveUsersToJson(postId, users);
+      console.log('💾 Salvando dados iniciais...');
+      await this.finder.saveUsersToJson(postId, users);
       
       // Organiza arquivos na estrutura correta
-      await this.organizePostFiles(postId);
+      await this.#organizePostFiles(postId);
+      
+      // Enriquece dados dos usuários
+      console.log('🔍 Enriquecendo dados dos usuários...');
+      const usersFilePath = path.join(postDir, 'users.json');
+      const enrichedFilePath = path.join(postDir, 'users.enriched.json');
+      await this.enricher.processUsersFile(usersFilePath, enrichedFilePath);
       
       // Processa análise de bots
-      console.log('🤖 Running bot analysis...');
-      const postDir = path.join(this.outputDir, `post-${postId}`);
-      await this.botRanker.processPostDirectory(postDir);
+      await this.analyzer.processPostDirectory(postDir);
       
       console.log(`✅ Post ${postId} processed successfully`);
       
@@ -111,9 +120,8 @@ export default class Orchestrator {
   }
 
   // Executa o processamento de todos os posts
-  public async run(): Promise<void> {
+  async run() {
     console.log('🚀 Starting Instagram Bot Analysis');
-    console.log('==================================');
     console.log(`📋 Posts to process: ${this.postUrls.length}`);
     
     try {
@@ -123,8 +131,7 @@ export default class Orchestrator {
       // Processa cada post
       for (let i = 0; i < this.postUrls.length; i++) {
         const url = this.postUrls[i];
-        console.log(`\n[${i + 1}/${this.postUrls.length}] Processing URL...`);
-        await this.processPost(url);
+        await this.#processPost(url);
       }
       
       console.log('\n🎉 All posts processed successfully!');

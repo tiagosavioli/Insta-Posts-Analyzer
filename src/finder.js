@@ -1,32 +1,20 @@
 import axios from 'axios';
 import fs from 'fs/promises';
 import path from 'path';
-import { loadFinderConfig, headerConfig } from '../config.js';
-import { FinderConfig, InstagramUser } from '../types/index.js';
 
 export class ContentFinder {
-  private config: FinderConfig | null = null;
-  private headers: Record<string, string>;
-  private outputDir: string;
-
-  constructor() {
-    this.headers = headerConfig;
+  constructor(finderConfig, headers) {
+    this.finderConfig = finderConfig;
+    this.headers = headers;
     this.outputDir = path.join(process.cwd(), 'output');
   }
 
-  private async getConfig(): Promise<FinderConfig> {
-    if (!this.config) {
-      this.config = await loadFinderConfig();
-    }
-    return this.config;
-  }
-
-  public extractPostIdFromUrl(url: string): string | null {
+  extractPostIdFromUrl(url) {
     const match = url.match(/\/media\/(\d+_\d+)/);
     return match ? match[1] : null;
-  }
+  } 
 
-  private async ensureOutputDir(): Promise<void> {
+  async #ensureOutputDir() {
     try {
       await fs.mkdir(this.outputDir, { recursive: true });
     } catch (error) {
@@ -34,13 +22,13 @@ export class ContentFinder {
     }
   }
 
-  public async saveUsersToJson(postId: string, usersData: InstagramUser[]): Promise<{ success: boolean; filePath: string }> {
+  async saveUsersToJson(postId, usersData) {
     try {
       if (!postId || !usersData || !Array.isArray(usersData)) {
         throw new Error('Invalid data for saving');
       }
 
-      await this.ensureOutputDir();
+      await this.#ensureOutputDir();
       
       const fileName = `${postId}-users.json`;
       const filePath = path.join(this.outputDir, fileName);
@@ -54,9 +42,6 @@ export class ContentFinder {
 
       await fs.writeFile(filePath, JSON.stringify(result, null, 2), 'utf8');
       
-      console.log(`File saved: ${fileName}`);
-      console.log(`Total users: ${usersData.length}`);
-      
       return {
         success: true,
         filePath
@@ -67,15 +52,16 @@ export class ContentFinder {
   }
 
   // Método simplificado para buscar dados de um post
-  public async fetchPostData(url: string): Promise<InstagramUser[]> {
+  async fetchPostData(url) {
     try {
-      const response = await axios.get(url, { headers: this.headers });
-      
-      if (response.data && response.data.users) {
-        return response.data.users;
-      }
-      
-      return [];
+
+      const response = await axios.get(url, { 
+        headers: this.headers,
+        timeout: this.finderConfig.requestTimeout
+      });
+
+      return response.data;
+
     } catch (error) {
       console.error(`Error fetching post data: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return [];
@@ -83,7 +69,7 @@ export class ContentFinder {
   }
 
   // Método para processar uma lista de URLs
-  public async processUrls(urls: string[]): Promise<void> {
+  async processUrls(urls) {
     for (const url of urls) {
       const postId = this.extractPostIdFromUrl(url);
       

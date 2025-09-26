@@ -1,36 +1,14 @@
 {
-  "name": "content-finder-api",
+  "name": "instagram-bot-analyzer",
   "version": "1.0.0",
-  "description": "Sistema de Detecção de Bots no Instagram com Interface Web",
-  "main": "dist/src/index.js",
+  "description": "Sistema de Detecção de Bots no Instagram",
+  "main": "src/index.js",
   "scripts": {
-    "build": "tsc",
-    "start": "npm run build && node dist/src/index.js",
-    "dev": "ts-node src/index.ts",
-    "ranker": "npm run build && node dist/scripts/ranker.js",
-    "server": "npm run build && node dist/src/index.js",
-    "web": "npm run build && node dist/src/index.js",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:ui": "vitest --ui"
+    "start": "node src/index.js"
   },
-  "keywords": [
-    "instagram",
-    "bot-detection"
-  ],
   "author": "",
-  "license": "MIT",
   "dependencies": {
-    "axios": "^1.6.0",
-    "express": "^4.21.2"
-  },
-  "devDependencies": {
-    "@types/express": "^4.17.21",
-    "@types/node": "^20.11.24",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.3.3",
-    "vitest": "^1.2.2",
-    "@vitest/ui": "^1.2.2"
+    "axios": "^1.6.0"
   },
   "type": "module"
 }
